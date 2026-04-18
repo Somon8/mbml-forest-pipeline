@@ -1,0 +1,22 @@
+# Environment
+.venv/
+__pycache__/
+*.pyc
+.python-version
+
+# Pipeline outputs (regenerated from rasters_to_csv.py + join_indexruta.py)
+out_*.csv
+output.csv
+
+# Raw rasters (live on external drive, symlinked into combined_rasters/)
+combined_rasters/*.tif
+
+# KMZ (NetworkLink only, not usable data — fetched live by join_indexruta.py)
+*.kmz
+
+# Editor / OS
+.DS_Store
+._*
+.idea/
+.vscode/
+.claude/
