@@ -14,6 +14,129 @@ header. Think of it as a lab notebook that feeds directly into the report.
 
 ---
 
+## 2026-04-22 — Spatial features (neighbourhood / directional / distance)
+
+Added a per-pixel spatial-context feature step on top of the preprocessed
+CSV, motivated by the observation that neighbouring cells carry information
+the individual pixel does not — most concretely, taller trees to the south
+of a pixel shade it (at 56° N the sun never crosses into the northern sky),
+so a "south-minus-north height" term is a direct illumination proxy. The
+same machinery also gives canopy roughness, forest-edge proximity, and
+distance-to-water without pulling in additional data.
+
+Artefact: **`spatial_features.py`**. Runs on `out_10km_idx_preprocessed.csv`
+in place by default; idempotent (drops its own output columns before
+recomputing). Takes ~10 s end to end.
+
+### Design
+
+- The preprocessed CSV is a complete 801 × 801 grid at 12.5 m, so the
+  target layer and the two boolean masks pivot directly to 2D arrays with
+  row 0 = northernmost y, column 0 = westernmost x. Everything else is
+  `scipy.ndimage`:
+  - `uniform_filter` for 3 × 3 / 5 × 5 mean and std (via
+    `E[X²] − E[X]²`, clipped at 0 to absorb float error)
+  - `convolve` with four hand-built directional kernels for N/E/S/W means
+  - `sobel` for the gradient (row-axis sign flipped because row 0 is north)
+  - `distance_transform_edt` on the inverse mask, scaled by 12.5 m
+- Boundaries: `reflect` everywhere. AOI-edge cells therefore get
+  plausible-but-fabricated neighbours rather than NaN; acceptable given
+  the 10 km AOI vs. a 5-cell kernel radius.
+- Target layer: **`p95_omdrev2`** (10 m 95th-percentile canopy height). It
+  already passed §2.4 / §2.8 of the previous session as the cleanest height
+  proxy and is on the 12.5 m reference grid after resampling.
+
+### Target layers and columns added (18)
+
+Eight per-layer features are computed for every layer in the script's
+`TARGET_LAYERS` list. The list currently holds both height candidates —
+**`p95_omdrev2`** (95th-percentile canopy) and **`medelhojd_omdrev2`**
+(stand mean) — because either could end up as the modelling target y, and
+the spatial-context features are target-specific. Building both now avoids
+a second pass and the two sets come out near-identical (per §2.8 the
+layers track each other on forested pixels), so the choice is deferred
+to the modelling step. Plus two target-agnostic distance features.
+
+**Per-layer (×2 layers = 16 columns):**
+
+| Column | Meaning |
+|---|---|
+| `<L>_mean3`, `_std3` | 3 × 3 neighbourhood mean and std (dm) |
+| `<L>_mean5`, `_std5` | 5 × 5 neighbourhood mean and std (dm) |
+| `<L>_dNS` | mean(S 3 cells) − mean(N 3 cells), dm. Positive ⇒ taller south ⇒ pixel shaded from south |
+| `<L>_dEW` | mean(E) − mean(W), dm |
+| `<L>_grad_mag` | Sobel gradient magnitude (dm / cell) |
+| `<L>_grad_aspect` | `atan2(dZ/dy_geo, dZ/dx_geo)`, rad (0 = east, π/2 = north) |
+
+**Target-agnostic (2 columns):**
+
+| Column | Meaning |
+|---|---|
+| `dist_to_no_forest_m` | Euclidean distance to nearest `is_no_forest` pixel, m |
+| `dist_to_lake_m` | Euclidean distance to nearest `is_lake` pixel, m |
+
+Using `is_no_forest` and `is_lake` (both materialised in
+`Preprocessing.ipynb`) for the distance features means the edge / water
+definitions agree exactly with the mask logic from the previous session:
+non-forest in *both* inventory cycles for the former, `markfuktighet_klassad
+== 4` for the latter.
+
+### Summary stats on the current AOI
+
+```
+                               p50       p95       max      unit
+p95_omdrev2_mean3             131.6     233.6     324.2     dm
+p95_omdrev2_std3               23.4      82.5     149.6     dm
+p95_omdrev2_mean5             129.4     226.7     303.1     dm
+p95_omdrev2_std5               37.8      87.3     139.5     dm
+p95_omdrev2_dNS                 0.0      84.0     303.3     dm
+p95_omdrev2_dEW                 0.0      86.7     299.7     dm
+p95_omdrev2_grad_mag          150.9     661.5    1338.0     dm / cell
+medelhojd_omdrev2_mean3       130.1     228.9     317.2     dm
+medelhojd_omdrev2_std3         23.2      81.7     146.2     dm
+medelhojd_omdrev2_mean5       127.9     222.3     296.7     dm
+medelhojd_omdrev2_std5         37.2      86.5     137.3     dm
+medelhojd_omdrev2_dNS           0.0      82.7     296.7     dm
+medelhojd_omdrev2_dEW           0.0      85.3     293.0     dm
+medelhojd_omdrev2_grad_mag    149.6     655.1    1305.0     dm / cell
+dist_to_no_forest_m            72.9     234.9     499.5     m
+dist_to_lake_m                600.0    1307.0    1765.1     m
+```
+
+`mean3` median 131.6 dm (p95) / 130.1 dm (medelhojd) matches the raw-layer
+medians (138 / 137 dm) to within a few dm — the expected sanity check that
+a 3 × 3 mean of a slowly-varying layer tracks the point value. `dNS` and
+`dEW` medians are exactly 0 for both targets, so the directional signal is
+symmetric in bulk and only the tails carry information — exactly what you
+want from a differential feature (no additive offset contaminating the
+"flat" case). The two targets produce nearly identical distributions
+across every feature, consistent with their high forest-pixel correlation
+(§2.8); the choice between them is therefore a modelling decision, not a
+spatial-feature one.
+
+### Implications / next steps
+
+- Redundancy with existing covariates: `mean3 / mean5` correlate strongly
+  with `p95_omdrev2` itself and with each other. For a linear model keep
+  at most one; for a tree-based model keep both and let the splits sort
+  it out.
+- The **dNS** feature is the one explicitly hypothesised about
+  (south-illumination). If it comes out significant in the model, that is
+  a narratable sentence for the report: "taller canopy immediately south
+  of a pixel predicts reduced [growth / biomass / whatever] in that
+  pixel, consistent with shading at 56° N". If it does not, that is also
+  worth reporting — the Swedish lidar resolution may be too coarse for
+  single-tree shading to be resolvable at 12.5 m.
+- Not added deliberately: the same stats on `biomassa_omdrev2` /
+  `volym_omdrev2` / `tradhojd`. Given the cross-layer correlations from
+  §2.8 they would be near-duplicates of the `p95` / `medelhojd` versions.
+  Easy to extend though — just append the layer name to the script's
+  `TARGET_LAYERS` list.
+- `flodesackumulering`-based distance (nearest high-flow cell ≈ stream
+  proxy) is a candidate for later if a hydrology angle is wanted.
+
+---
+
 ## 2026-04-22 — Exploratory analysis and preprocessing masks
 
 Exploratory analysis and preprocessing design for the Swedish forest tabular

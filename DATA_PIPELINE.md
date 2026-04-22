@@ -324,7 +324,62 @@ t = Transformer.from_crs(3006, 4326, always_xy=True)
 lon, lat = t.transform(x, y)
 ```
 
-## 6. Environment
+## 6. Spatial features — neighbourhood, directional, distance-to-mask
+
+Script: [`spatial_features.py`](spatial_features.py).
+
+Runs after the preprocessing notebook has materialised the `is_no_forest`
+and `is_lake` masks. The preprocessed CSV is a complete 801 × 801 regular
+grid at 12.5 m spacing, so target layers and the boolean masks pivot
+directly to 2D arrays (row 0 = north, column 0 = west) — no GIS operations
+required. `scipy.ndimage` does the heavy lifting: `uniform_filter` for
+windowed mean / std, `convolve` with directional kernels, `sobel` for the
+gradient, and `distance_transform_edt` for the distance-to-mask features.
+
+The same eight per-layer features are computed for each layer in the
+script's `TARGET_LAYERS` list. It currently holds **`p95_omdrev2`** and
+**`medelhojd_omdrev2`** — both are plausible modelling targets (canopy
+height from two different summary statistics), so we build the spatial
+context for both and pick later. Add or remove target layers by editing
+that list.
+
+**Per-layer features** (`<L>` ∈ `TARGET_LAYERS`, dm-valued canopy heights):
+
+| Column | Meaning | Units |
+|---|---|---|
+| `<L>_mean3`, `<L>_std3` | 3 × 3 neighbourhood mean and std | dm |
+| `<L>_mean5`, `<L>_std5` | 5 × 5 neighbourhood mean and std | dm |
+| `<L>_dNS` | mean(south 3 cells) − mean(north 3 cells). Positive = taller canopy south of the pixel, so the pixel is shaded from the south | dm |
+| `<L>_dEW` | mean(east 3 cells) − mean(west 3 cells) | dm |
+| `<L>_grad_mag` | \|∇L\|, Sobel | dm / cell |
+| `<L>_grad_aspect` | `atan2(dZ/dy_geo, dZ/dx_geo)` (0 = east, π/2 = north) | rad |
+
+**Target-agnostic distance features** (computed once):
+
+| Column | Meaning | Units |
+|---|---|---|
+| `dist_to_no_forest_m` | Euclidean distance to nearest `is_no_forest` cell | m |
+| `dist_to_lake_m` | Euclidean distance to nearest `is_lake` cell | m |
+
+Convolutions use `reflect` boundaries, so cells at the AOI edge fall back
+to their visible neighbours rather than becoming NaN. The script is
+idempotent — if any of the columns above already exist in the input CSV,
+they are dropped before being recomputed.
+
+Run:
+
+```bash
+uv run python Projects/spatial_features.py \
+    Projects/out_10km_idx_preprocessed.csv            # overwrites in place
+# or, to write to a new file:
+uv run python Projects/spatial_features.py \
+    Projects/out_10km_idx_preprocessed.csv --out Projects/out_10km_idx_spatial.csv
+```
+
+Output: same row count, **+18 columns** (8 × 2 target layers + 2 distance)
+— 62 total after this step.
+
+## 7. Environment
 
 Managed with `uv`; `pyproject.toml` at the repo root pins Python ≥ 3.12 and
 declares `rasterio`, `pyproj`, `numpy`, `pandas`, `scipy`, plus the modelling
@@ -334,7 +389,7 @@ libraries (`pyro-ppl`, `torch`, `scikit-learn`, ...). Recreate with:
 uv sync
 ```
 
-## 7. Reproducibility checklist
+## 8. Reproducibility checklist
 
 - Raw GeoTIFFs are immutable inputs (`combined_rasters/`).
 - `rasters_to_csv.py` is deterministic given the same `--sw` / `--size` /
