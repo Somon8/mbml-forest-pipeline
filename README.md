@@ -14,21 +14,29 @@ The 10 km × 10 km AOI (SW corner `56.395705, 14.123307`, 641,601 rows, 29
 raster layers + Sverige-indexruta attributes) is published as a GitHub
 Release — no need to re-run the pipeline or download the raw rasters.
 
-- **Browser:** [Releases → v1.0-data](https://github.com/Somon8/mbml-forest-pipeline/releases/tag/v1.0-data) → scroll to *Assets* → click `out_10km_idx.csv`.
+### Preprocessed (recommended for modelling) — v1.1-data
+
+- **Browser:** [Releases → v1.1-data](https://github.com/Somon8/mbml-forest-pipeline/releases/tag/v1.1-data) → scroll to *Assets* → click `out_10km_idx_preprocessed.csv`.
 - **curl:**
   ```bash
-  curl -LO https://github.com/Somon8/mbml-forest-pipeline/releases/download/v1.0-data/out_10km_idx.csv
+  curl -LO https://github.com/Somon8/mbml-forest-pipeline/releases/download/v1.1-data/out_10km_idx_preprocessed.csv
   ```
 - **gh CLI:**
   ```bash
-  gh release download v1.0-data -R Somon8/mbml-forest-pipeline -p out_10km_idx.csv
+  gh release download v1.1-data -R Somon8/mbml-forest-pipeline -p out_10km_idx_preprocessed.csv
   ```
-
-Assets on that release:
 
 | File | Size | Contents |
 |---|---|---|
-| `out_10km_idx.csv` | 134 MB | 29 raster layers + indexruta columns (BK, PageName, Storruta, CenterLanNamn, CenterKommunNamn) — **use this one** |
+| `out_10km_idx_preprocessed.csv` | 162 MB | Cleaned + feature-engineered version of `out_10km_idx.csv`. See [`Preprocessing.ipynb`](Preprocessing.ipynb) for the exact steps. |
+
+### Raw flat dataset — v1.0-data
+
+If you want to redo preprocessing yourself, the raw flat dataset is on [v1.0-data](https://github.com/Somon8/mbml-forest-pipeline/releases/tag/v1.0-data):
+
+| File | Size | Contents |
+|---|---|---|
+| `out_10km_idx.csv` | 134 MB | 29 raster layers + indexruta columns (BK, PageName, Storruta, CenterLanNamn, CenterKommunNamn) |
 | `out_10km.csv` | 108 MB | Raster layers only, no indexruta join |
 
 ## Quick start
