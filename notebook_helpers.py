@@ -892,9 +892,7 @@ def posterior_predictive_coverage(models, slice_step_fn, name, n_cells,
 
 
 def calibration_figure(models, slice_step_fn,
-                       candidate_models=("Exact", "SVI", "MCMC", "Heteroscedastic",
-                                         "Hierarchical", "BNN", "Cluster",
-                                         "Cluster+FeatLag"),
+                       candidate_models=("Exact", "SVI", "MCMC", "Heteroscedastic"),
                        alpha_levels=None, seed=42):
     """Empirical vs nominal posterior-predictive coverage, one line per Bayesian model."""
     import matplotlib.pyplot as plt
@@ -927,15 +925,13 @@ def spatial_residual_maps(models, slice_step_fn, target_step="all"):
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
     s = slice_step_fn(target_step)
-    y_true = (s["y_test"] * s["y_std"] + s["y_mean"]).ravel()
+    y_true = s["y_test"] * s["y_std"] + s["y_mean"]
     coords_te = s["coords_test"]
     eligible = [m for m in models
                 if target_step in models[m]
                 and models[m][target_step].get("y_pred_test") is not None]
-    # ravel each y_pred_test so registered arrays of shape (n,) and (1, n) both work.
     all_res = np.concatenate([
-        np.asarray(models[m][target_step]["y_pred_test"]).ravel() - y_true
-        for m in eligible])
+        models[m][target_step]["y_pred_test"] - y_true for m in eligible])
     vmax = float(np.quantile(np.abs(all_res), 0.98))
     norm = mcolors.TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
 
@@ -947,7 +943,7 @@ def spatial_residual_maps(models, slice_step_fn, target_step="all"):
     sc = None
     for i, name in enumerate(eligible):
         ax = axes[i]
-        res = np.asarray(models[name][target_step]["y_pred_test"]).ravel() - y_true
+        res = models[name][target_step]["y_pred_test"] - y_true
         sc = ax.scatter(coords_te[:, 0], coords_te[:, 1], c=res, cmap="RdBu_r",
                           norm=norm, s=4, rasterized=True)
         moran = models[name][target_step]["metrics"]["MoranI"]
@@ -1084,12 +1080,13 @@ def posterior_predictive_density_figure(models, slice_step_fn, target_step="all"
                               constrained_layout=True, sharex=True)
     axes = np.atleast_1d(axes).flatten()
     for ax, name in zip(axes, eligible):
-        payload = models[name][target_step]
-        coefs = payload.get("coefs_samples")
-        sigma = payload.get("sigma_samples")
-        if (coefs is not None and coefs.shape[0] > 1
-                and coefs.shape[-1] == 1 + X_test.shape[1]
-                and sigma is not None):
+        p = models[name][target_step]
+        coefs = p.get("coefs_samples")
+        sigma = p.get("sigma_samples")
+        linear_path = (coefs is not None and sigma is not None
+                       and coefs.shape[0] > 1
+                       and coefs.shape[-1] == 1 + X_test.shape[1])
+        if linear_path:
             n_use = min(n_pp, coefs.shape[0])
             draw_idx = rng.choice(coefs.shape[0], size=n_use, replace=False)
             mean_std = coefs[draw_idx, 0:1].T + X_test @ coefs[draw_idx, 1:].T
@@ -1097,10 +1094,14 @@ def posterior_predictive_density_figure(models, slice_step_fn, target_step="all"
             pp_std = mean_std + sigma_std * rng.normal(size=mean_std.shape)
             pp = (pp_std * y_std_g + y_mean_g).ravel()
         else:
-            pp = np.asarray(payload["y_pred_samples_test"]).ravel()
+            y_samp = p["y_pred_samples_test"]
+            n_use = min(n_pp, y_samp.shape[0])
+            draw_idx = rng.choice(y_samp.shape[0], size=n_use, replace=False)
+            pp = y_samp[draw_idx].ravel()
         ax.hist(y_true, bins=80, density=True, alpha=0.55, label="observed y",            color="C0")
         ax.hist(pp,     bins=80, density=True, alpha=0.55, label="posterior predictive",  color="C3")
         ax.set_title(name); ax.set_xlabel("ΔV (m³/ha)")
+        ax.set_xlim(right=500)
         ax.legend(fontsize=8)
     for ax in axes[len(eligible):]:
         ax.set_visible(False)
