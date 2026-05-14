@@ -784,128 +784,6 @@ def run_across_scaling(name, scaling_grid, slice_fn, fit_fn, *,
 # §9 — Comparison figures
 # ======================================================================
 
-def _extract_payload_value(payload, key):
-    """`wall_time_s` is stored at the top level by register_run; metrics are nested."""
-    return payload["metrics"].get(key, payload.get(key))
-
-
-def scaling_axis_figure(models, panels=None):
-    """4-panel scaling-axis figure: RMSE / R² / Moran's I / wall time vs n_train."""
-    import matplotlib.pyplot as plt
-    if panels is None:
-        panels = [("RMSE",         "RMSE (m³/ha)",         False),
-                  ("R2",           "R²",                   False),
-                  ("MoranI",       "Moran's I (residuals)", False),
-                  ("wall_time_s",  "wall time (s)",         True)]
-    fig, axes = plt.subplots(1, len(panels), figsize=(5 * len(panels), 4),
-                              constrained_layout=True)
-    for ax, (metric, label, log_y) in zip(axes, panels):
-        for model_name, by_n in models.items():
-            items = sorted(by_n.items(), key=lambda kv: by_n[kv[0]]["n_train"])
-            xs, ys = [], []
-            for _, v in items:
-                val = _extract_payload_value(v, metric)
-                if val is None:
-                    continue
-                xs.append(v["n_train"]); ys.append(val)
-            if xs:
-                ax.plot(xs, ys, marker="o", label=model_name, alpha=0.85)
-        ax.set_xscale("log")
-        if log_y:
-            ax.set_yscale("log")
-        ax.set_xlabel("training pixels")
-        ax.set_ylabel(label)
-        ax.grid(True, alpha=0.3, which="both")
-    axes[-1].legend(loc="upper left", fontsize=8)
-    fig.suptitle("Test-set metrics + compute vs training-set size", fontsize=11)
-    plt.show()
-
-
-def forest_plot(models, feature_names, target_step="all"):
-    """Posterior coefficient forest plot (90% CIs). Skips models whose feature
-    schema doesn't match feature_names (e.g. OLS-factor has a different design)."""
-    import matplotlib.pyplot as plt
-    feature_labels_full = ["intercept"] + list(feature_names)
-    n_expected = len(feature_labels_full)
-
-    eligible = [m for m in models
-                if target_step in models[m]
-                and models[m][target_step]["coefs_samples"] is not None
-                and models[m][target_step]["coefs_samples"].shape[-1] == n_expected]
-    skipped = [m for m in models
-               if target_step in models[m]
-               and models[m][target_step]["coefs_samples"] is not None
-               and models[m][target_step]["coefs_samples"].shape[-1] != n_expected]
-    if skipped:
-        print(f"forest plot: skipping models with different feature schema -> {skipped}")
-
-    n_models = len(eligible)
-    fig, ax = plt.subplots(figsize=(9, max(5, 0.4 * n_expected)),
-                            constrained_layout=True)
-    for i in range(0, n_expected, 2):
-        ax.axhspan(i - 0.5, i + 0.5, color="gray", alpha=0.07, zorder=0)
-    for i in range(n_expected - 1):
-        ax.axhline(i + 0.5, color="gray", alpha=0.25, linewidth=0.5, zorder=0)
-
-    offsets = np.linspace(-0.3, 0.3, n_models) if n_models > 1 else [0.0]
-    colors  = plt.cm.tab10(np.linspace(0, 1, max(n_models, 2)))
-
-    for idx, name in enumerate(eligible):
-        coefs = models[name][target_step]["coefs_samples"]
-        means = coefs.mean(axis=0)
-        if coefs.shape[0] > 1:
-            lo = np.quantile(coefs, 0.05, axis=0)
-            hi = np.quantile(coefs, 0.95, axis=0)
-        else:
-            lo = hi = means
-        y_pos = np.arange(n_expected) + offsets[idx]
-        ax.errorbar(means, y_pos, xerr=[means - lo, hi - means],
-                     fmt="o", capsize=3, color=colors[idx],
-                     label=name, alpha=0.85, zorder=2)
-    ax.axvline(0, color="k", linestyle=":", alpha=0.5, zorder=1)
-    ax.set_yticks(np.arange(n_expected))
-    ax.set_yticklabels(feature_labels_full)
-    ax.set_ylim(n_expected - 0.5, -0.5)
-    ax.set_xlabel("standardised coefficient (intercept + β)")
-    ax.set_title(f"Posterior 90% CIs at n_cells = {target_step!r} — OLS shown without uncertainty")
-    ax.legend(loc="best", fontsize=8)
-    plt.show()
-
-
-def predicted_vs_actual_figure(models, slice_step_fn, target_step="all"):
-    """Scatter grid of predicted vs actual y on the test set, one panel per model."""
-    import matplotlib.pyplot as plt
-    s = slice_step_fn(target_step)
-    y_true = s["y_test"] * s["y_std"] + s["y_mean"]
-    eligible = [m for m in models
-                if target_step in models[m]
-                and models[m][target_step].get("y_pred_test") is not None]
-    n_cols = 3
-    n_rows = (len(eligible) + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 4 * n_rows),
-                              constrained_layout=True, sharex=True, sharey=True)
-    axes = np.atleast_1d(axes).flatten()
-    xmin = float(min(y_true.min(),
-                      min(models[m][target_step]["y_pred_test"].min() for m in eligible)))
-    xmax = float(max(y_true.max(),
-                      max(models[m][target_step]["y_pred_test"].max() for m in eligible)))
-    for i, name in enumerate(eligible):
-        ax = axes[i]
-        y_pred = models[name][target_step]["y_pred_test"]
-        m = models[name][target_step]["metrics"]
-        ax.scatter(y_true, y_pred, s=2, alpha=0.15, rasterized=True)
-        ax.plot([xmin, xmax], [xmin, xmax], "k--", alpha=0.5, linewidth=1)
-        ax.set_title(f"{name}  (RMSE = {m['RMSE']:.1f}, R² = {m['R2']:.3f})")
-        if i % n_cols == 0:
-            ax.set_ylabel("predicted ΔV (m³/ha)")
-        if i >= (n_rows - 1) * n_cols:
-            ax.set_xlabel("actual ΔV (m³/ha)")
-    for ax in axes[len(eligible):]:
-        ax.set_visible(False)
-    fig.suptitle(f"Predicted vs. actual (n_cells = {target_step!r})", fontsize=11)
-    plt.show()
-
-
 def posterior_predictive_coverage(models, slice_step_fn, name, n_cells,
                                   alpha_levels, seed=42):
     """Empirical coverage at every nominal credible level for one (model, step).
@@ -983,216 +861,6 @@ def calibration_figure(models, slice_step_fn,
     plt.show()
 
 
-def spatial_residual_maps(models, slice_step_fn, target_step="all"):
-    """One residual-map panel per model; shared diverging colour scale."""
-    import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
-    s = slice_step_fn(target_step)
-    y_true = s["y_test"] * s["y_std"] + s["y_mean"]
-    coords_te = s["coords_test"]
-    eligible = [m for m in models
-                if target_step in models[m]
-                and models[m][target_step].get("y_pred_test") is not None]
-    all_res = np.concatenate([
-        models[m][target_step]["y_pred_test"] - y_true for m in eligible])
-    vmax = float(np.quantile(np.abs(all_res), 0.98))
-    norm = mcolors.TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
-
-    n_cols = 3
-    n_rows = (len(eligible) + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 4 * n_rows),
-                              constrained_layout=True)
-    axes = np.atleast_1d(axes).flatten()
-    # Zoom window: top-left 60% x 60% of the AOI (anchored at x_min, y_max).
-    x_min, x_max = coords_te[:, 0].min(), coords_te[:, 0].max()
-    y_min, y_max = coords_te[:, 1].min(), coords_te[:, 1].max()
-    dx, dy = 0.6 * (x_max - x_min), 0.6 * (y_max - y_min)
-    xlim = (x_min, x_min + dx)
-    ylim = (y_max - dy, y_max)
-
-    sc = None
-    for i, name in enumerate(eligible):
-        ax = axes[i]
-        res = models[name][target_step]["y_pred_test"] - y_true
-        sc = ax.scatter(coords_te[:, 0], coords_te[:, 1], c=res, cmap="RdBu_r",
-                          norm=norm, s=4, rasterized=True)
-        moran = models[name][target_step]["metrics"].get("MoranI")
-        title = f"{name}   Moran's I = {moran:.2f}" if moran is not None else name
-        ax.set_title(title)
-        ax.set_aspect("equal")
-        ax.set_xlim(*xlim); ax.set_ylim(*ylim)
-        ax.set_xticks([]); ax.set_yticks([])
-    for ax in axes[len(eligible):]:
-        ax.set_visible(False)
-    if sc is not None:
-        fig.colorbar(sc, ax=axes, label="residual (m³/ha)", shrink=0.6)
-    fig.suptitle(f"Test-set residuals in space (n_cells = {target_step!r})", fontsize=11)
-    plt.show()
-
-
-def residuals_vs_covariates_figure(models, slice_step_fn, feature_names,
-                                   target_step="all", top_k=3):
-    """For each eligible model, scatter test residuals vs the top-k |β| covariates."""
-    import matplotlib.pyplot as plt
-    s = slice_step_fn(target_step)
-    y_true = s["y_test"] * s["y_std"] + s["y_mean"]
-    X_test = s["X_test"]
-    n_expected = 1 + len(feature_names)
-    eligible = [m for m in models
-                if target_step in models[m]
-                and models[m][target_step].get("coefs_samples") is not None
-                and models[m][target_step]["coefs_samples"].shape[-1] == n_expected
-                and models[m][target_step].get("y_pred_test") is not None]
-    if not eligible:
-        print("residuals_vs_covariates_figure: no eligible models — run §7 / §8 first")
-        return None
-
-    n_rows = len(eligible)
-    fig, axes = plt.subplots(n_rows, top_k, figsize=(4 * top_k, 3 * n_rows),
-                              constrained_layout=True, sharey=False)
-    axes = np.atleast_2d(axes)
-    for r, name in enumerate(eligible):
-        coefs = models[name][target_step]["coefs_samples"]
-        beta_mean = coefs.mean(0)[1:]
-        top = np.argsort(-np.abs(beta_mean))[:top_k]
-        y_pred = models[name][target_step]["y_pred_test"]
-        res = y_pred - y_true
-        for c, idx in enumerate(top):
-            ax = axes[r, c]
-            ax.scatter(X_test[:, idx], res, s=2, alpha=0.2, rasterized=True)
-            ax.axhline(0, color="k", lw=0.5, alpha=0.5)
-            ax.set_xlabel(f"{feature_names[idx]} (standardised)")
-            if c == 0:
-                ax.set_ylabel(f"{name}\nresidual (m³/ha)")
-            ax.set_title(f"β̂ = {beta_mean[idx]:+.2f}", fontsize=9)
-    fig.suptitle(f"Test residuals vs top-{top_k} |β| covariates (n_cells = {target_step!r})",
-                  fontsize=11)
-    plt.show()
-
-
-def posterior_density_overlay(models, feature_names,
-                              methods=("Exact", "SVI", "MCMC"),
-                              target_step="all", top_k=4):
-    """Marginal posterior of intercept + top-k |β| coefficients across inferences."""
-    import matplotlib.pyplot as plt
-    def _step(name):
-        by_n = models.get(name, {})
-        if (target_step in by_n
-            and by_n[target_step].get("coefs_samples") is not None
-            and by_n[target_step]["coefs_samples"].shape[0] > 1):
-            return target_step
-        cands = [k for k, v in by_n.items()
-                 if v.get("coefs_samples") is not None and v["coefs_samples"].shape[0] > 1]
-        return max(cands, key=lambda k: by_n[k]["n_train"]) if cands else None
-
-    present = [(m, _step(m)) for m in methods]
-    present = [(m, k) for m, k in present if k is not None]
-    if not present:
-        print("posterior_density_overlay: need at least one Bayesian model — run §8")
-        return None
-    ref_name, ref_step = present[0]
-    ref_coefs = models[ref_name][ref_step]["coefs_samples"]
-    beta_abs = np.abs(ref_coefs.mean(0)[1:])
-    top = np.argsort(-beta_abs)[:top_k]
-    coef_idx = [0] + [1 + i for i in top]
-    coef_lab = ["intercept"] + [feature_names[i] for i in top]
-
-    colors = {"Exact": "C0", "SVI": "C1", "MCMC": "C2"}
-    fig, axes = plt.subplots(1, len(coef_idx), figsize=(3 * len(coef_idx), 3),
-                              constrained_layout=True)
-    for ax, ci, lab in zip(axes, coef_idx, coef_lab):
-        for name, step in present:
-            coefs = models[name][step]["coefs_samples"]
-            ax.hist(coefs[:, ci], bins=40, density=True, alpha=0.45,
-                     color=colors.get(name), label=f"{name} (n_cells={step!r})")
-        ax.set_title(lab, fontsize=9)
-        ax.set_xlabel("coef value")
-    axes[0].set_ylabel("posterior density")
-    axes[-1].legend(fontsize=7, loc="upper right")
-    fig.suptitle("Posterior-density overlay across inference methods", fontsize=11)
-    plt.show()
-
-
-def posterior_predictive_density_figure(models, slice_step_fn, target_step="all",
-                                        n_pp=50, seed=42):
-    """Histogram of posterior-predictive y_new vs observed y on the test set.
-
-    Resolution order per model (same as posterior_predictive_coverage):
-      1. ``y_pred_samples_test`` array on the original-y scale, if registered —
-         used directly.
-      2. Identity-link Gaussian BLR reconstruction from
-         ``coefs_samples`` (S, 1+d) and ``sigma_samples`` (S,) — for models whose
-         likelihood is N(α + Xβ, σ²) on standardised y.
-      3. Otherwise skipped with a printed note (point models OLS / GBM).
-    """
-    import matplotlib.pyplot as plt
-    s = slice_step_fn(target_step)
-    y_true = s["y_test"] * s["y_std"] + s["y_mean"]
-    X_test = s["X_test"]
-    y_mean_g, y_std_g = s["y_mean"], s["y_std"]
-    n_expected = 1 + X_test.shape[1]
-
-    def _eligible(name):
-        if target_step not in models.get(name, {}):
-            return False
-        p = models[name][target_step]
-        if p.get("y_pred_samples_test") is not None:
-            return True
-        c, sgm = p.get("coefs_samples"), p.get("sigma_samples")
-        return (c is not None and c.shape[0] > 1
-                 and c.shape[-1] == n_expected
-                 and sgm is not None)
-
-    eligible = [m for m in models if _eligible(m)]
-    skipped  = [m for m in models if target_step in models[m] and not _eligible(m)]
-    if skipped:
-        print(f"posterior_predictive_density_figure: skipping (no y_pred_samples_test "
-              f"and not identity-link Gaussian BLR): {skipped}")
-    if not eligible:
-        print("posterior_predictive_density_figure: no eligible models")
-        return None
-
-    # Shared plotting window from observed y — a heavy-tailed predictive
-    # (LogNormal) would otherwise stretch the shared x-axis to thousands of
-    # m³/ha and squash every panel into a spike. Bins/range are confined to
-    # the window; tail mass beyond it is dropped from the shape comparison.
-    lo, hi = np.quantile(y_true, [0.005, 0.995])
-    pad = 0.15 * (hi - lo)
-    win = (float(lo - pad), float(hi + pad))
-
-    rng = np.random.default_rng(seed)
-    n_cols = 2
-    n_rows = (len(eligible) + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 3 * n_rows),
-                              constrained_layout=True, sharex=True)
-    axes = np.atleast_1d(axes).flatten()
-    for ax, name in zip(axes, eligible):
-        payload = models[name][target_step]
-        if payload.get("y_pred_samples_test") is not None:
-            pp_arr = np.asarray(payload["y_pred_samples_test"])
-            n_use = min(n_pp, pp_arr.shape[0])
-            draw_idx = rng.choice(pp_arr.shape[0], size=n_use, replace=False)
-            pp = pp_arr[draw_idx].ravel()
-        else:
-            coefs = payload["coefs_samples"]
-            sigma = payload["sigma_samples"]
-            n_use = min(n_pp, coefs.shape[0])
-            draw_idx = rng.choice(coefs.shape[0], size=n_use, replace=False)
-            mean_std  = coefs[draw_idx, 0:1].T + X_test @ coefs[draw_idx, 1:].T
-            sigma_std = sigma[draw_idx][None, :]
-            pp_std    = mean_std + sigma_std * rng.normal(size=mean_std.shape)
-            pp = (pp_std * y_std_g + y_mean_g).ravel()
-        ax.hist(y_true, bins=80, range=win, density=True, alpha=0.55, label="observed y",            color="C0")
-        ax.hist(pp,     bins=80, range=win, density=True, alpha=0.55, label="posterior predictive",  color="C3")
-        ax.set_title(name); ax.set_xlabel("ΔV (m³/ha)")
-        ax.legend(fontsize=8)
-    axes[0].set_xlim(*win)
-    for ax in axes[len(eligible):]:
-        ax.set_visible(False)
-    fig.suptitle(f"Posterior-predictive vs observed y (n_cells = {target_step!r})", fontsize=11)
-    plt.show()
-
-
 # ======================================================================
 # §9.x — Compact report figures (models as series on a shared axis)
 # ======================================================================
@@ -1247,8 +915,7 @@ def inference_forest_plot(models, feature_names,
 
     Posterior 90% CIs for `methods`, point estimates (diamonds, no bars) for
     `point_models`, on the intercept + top-k |β| features ranked by the first
-    available method. Compact replacement for the full forest_plot +
-    posterior_density_overlay pair.
+    available method.
     """
     import matplotlib.pyplot as plt
     feat_full = ["intercept"] + list(feature_names)
@@ -1342,31 +1009,43 @@ def ppc_density_overlay(models, slice_step_fn, names, target_step="all",
         k = min(n_pp, arr.shape[0])
         return arr[rng.choice(arr.shape[0], size=k, replace=False)].ravel()
 
-    # Plotting window from observed y — a heavy-tailed predictive (LogNormal)
-    # would otherwise stretch the shared x-axis to thousands of m³/ha and
-    # squash every other curve into a spike. Bins/range are confined to the
-    # window; tail mass beyond it is dropped from the shape comparison.
-    lo, hi = np.quantile(y_true, [0.005, 0.995])
-    pad = 0.15 * (hi - lo)
-    win = (float(lo - pad), float(hi + pad))
+    from scipy.stats import gaussian_kde
 
-    fig, ax = plt.subplots(figsize=(6, 4), constrained_layout=True)
-    ax.hist(y_true, bins=80, range=win, density=True, alpha=0.4, color="0.5",
-            label="observed y")
-    plotted = 0
-    for i, name in enumerate(names):
+    series = []
+    for name in names:
         pp = _pp(name)
         if pp is None:
             print(f"ppc_density_overlay: skipping {name!r} (no predictive)")
             continue
-        ax.hist(pp, bins=80, range=win, density=True, histtype="step",
-                linewidth=1.8, color=f"C{i}", label=name)
-        plotted += 1
-    if not plotted:
+        series.append((name, pp))
+    if not series:
         print("ppc_density_overlay: no eligible models")
-        plt.close(fig)
         return None
-    ax.set_xlim(*win)
+
+    # Window spans the central 99% of observed y AND of every model's
+    # predictive, so the left tails of the (near-)Gaussian predictives are
+    # captured; a heavy right tail (LogNormal) is bounded by its own 99.5th
+    # percentile rather than its extreme max.
+    qs = [np.quantile(y_true, [0.005, 0.995])]
+    qs += [np.quantile(pp, [0.005, 0.995]) for _, pp in series]
+    lo = min(q[0] for q in qs)
+    hi = max(q[1] for q in qs)
+    pad = 0.05 * (hi - lo)
+    grid = np.linspace(lo - pad, hi + pad, 400)
+
+    def _kde(x):
+        # subsample for speed — KDE shape is stable well below the full sample
+        if x.size > 40000:
+            x = rng.choice(x, size=40000, replace=False)
+        return gaussian_kde(x)(grid)
+
+    fig, ax = plt.subplots(figsize=(6, 4), constrained_layout=True)
+    ax.fill_between(grid, _kde(y_true), color="0.6", alpha=0.4,
+                    label="observed y")
+    for i, (name, pp) in enumerate(series):
+        ax.plot(grid, _kde(pp), color=f"C{i}", linewidth=1.8, label=name)
+    ax.set_xlim(grid[0], grid[-1])
+    ax.set_ylim(bottom=0)
     ax.set_xlabel("ΔV (m³/ha)"); ax.set_ylabel("density")
     ax.set_title(f"Posterior-predictive vs observed (n_cells = {target_step!r})")
     ax.legend(fontsize=8)
