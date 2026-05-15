@@ -313,7 +313,7 @@ def register_run(name: str, n_cells, *, metrics: dict, n_train: int, n_test: int
       density figure and calibration plot prefer ``y_pred_samples_test`` over
       the linear reconstruction whenever present.
 
-    For point models (OLS / GBM) pass coefs_samples shape (1, 1+n_features)
+    For point models (OLS / HGBT) pass coefs_samples shape (1, 1+n_features)
     or omit; they are skipped by the Bayesian-only diagnostics.
 
     ``sigma_samples`` units are NOT cross-model comparable: it is the SD on
@@ -832,7 +832,7 @@ def calibration_figure(models, slice_step_fn,
     """Empirical vs nominal posterior-predictive coverage, one line per Bayesian model.
 
     By default every registered model is tried; models with no predictive
-    distribution (OLS / GBM) yield ``None`` from posterior_predictive_coverage
+    distribution (OLS / HGBT) yield ``None`` from posterior_predictive_coverage
     and are skipped. Pass ``candidate_models`` to restrict the set explicitly.
     """
     import matplotlib.pyplot as plt
@@ -855,7 +855,7 @@ def calibration_figure(models, slice_step_fn,
     ax.set_xlabel("nominal credible level α")
     ax.set_ylabel("empirical coverage on test set")
     ax.set_title("Posterior-predictive calibration\n"
-                  "(point models OLS / GBM cannot appear — no predictive distribution)")
+                  "(point models OLS / HGBT cannot appear — no predictive distribution)")
     ax.legend(loc="lower right", fontsize=9)
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
     plt.show()
@@ -866,7 +866,7 @@ def calibration_figure(models, slice_step_fn,
 # ======================================================================
 
 def metric_dotplot(models, metric="RMSE", target_step="all",
-                   ceiling_models=("OLS", "GBM")):
+                   ceiling_models=("OLS", "HGBT")):
     """Horizontal dot plot ranking every model on one metric at `target_step`.
 
     Covers both the §7.1 point-accuracy ranking (metric="RMSE") and the §7.4
